@@ -14,7 +14,7 @@ Reactor 设计模式处理由一个或者多个客户端同时提交给应用程
 
 为了阐述 Reactor 模式，请看图1所示的运行着分布式日志记录服务的事件驱动服务器。
 
-![Logging server](/Users/chisoncloud/projects/reactor-translation/logging-server.png)
+![Logging server](logging-server.png)
 
 
 
@@ -28,7 +28,7 @@ Reactor 设计模式处理由一个或者多个客户端同时提交给应用程
 
 
 
-![](/Users/chisoncloud/projects/reactor-translation/multi-thread-logging-server.png)
+![multi-thread logging server](multi-thread-logging-server.png)
 
 这种方法同步地接受网络连接，并按照“一个线程一个连接（thread-per-connection）”的模式来处理客户端日志记录。然而，使用多线程在服务器中实现日志记录的处理无法解决以下问题：
 
