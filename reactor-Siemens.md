@@ -170,7 +170,7 @@ Reactor 模式中的协作在日志服务器中可以用两个场景来说明，
 
 下面是开发 `Initiation Dispatcher` 的必要步骤：
 
-**实现事件处理器（Event handler）列表**：`Initiation Dispatcher` 维护了包含具体事件处理器的列表，因此，`Initiation Dispatcher` 会提供在运行时向列表注册和移除这些事件处理器的方法。这个列表可以采用多种方式实现，比如，如果句柄表示为小整数值的连续范围，则可以使用散列、线性搜索或直接索引。
+**实现 `Event handler` 列表**：`Initiation Dispatcher` 维护了包含具体事件处理器的列表，因此，`Initiation Dispatcher` 会提供在运行时向列表注册和移除这些事件处理器的方法。这个列表可以采用多种方式实现，比如，如果句柄表示为小整数值的连续范围，则可以使用散列、线性搜索或直接索引。
 
 **实现事件循环的入口点**：`Initiation Dispatcher` 事件循环的入口点应该使用 `handle_events` 方法提供，该方法控制由 `Synchronous Event Demultiplexer` 提供的句柄多路分离，同时还执行 `Event Handler` 的分派。整个应用程序的主事件循环常常被这个入口点控制着。
 
@@ -215,6 +215,70 @@ public:
 为了防止自死锁，互斥机制可以使用递归锁【注：也叫可重入锁】，当递归锁被在 `Initiation Dispatcher` 内跨越多个 `Event Handler` 钩子方法的同一个线程持有时，可以阻止死锁。递归锁可以被已经持有锁的线程不需要阻塞就可以重新获取，这个属性很重要，因为 Reactor 的 `handle_events` 方法被特定于应用的 `Event Handlers` 回调。应用程序钩子方法代码随后可能通过 `Initiation Dispatcher` 的 `register_handler` 和 `remove_handler` 方法重新进入它。
 
 ### 决定分派目标的类型
+
+可以将两种不同的 `Event Handlers` 跟 `Handle` 联系起来作为 `Initiation Dispatcher` 的分派逻辑的目标。Reactor 模式的实现可以选择下面分派方法中的一个或者全部：
+
+**`Event Handler` 对象**：一个常用的将 `Event Handler` 和 `Handle` 关联起来的方法是把 `Event Handler` 实现成对象。比如说，如第七部分描述的 Reactor 实现将 `Event Handler` 作为子类对象注册到 `Initiation Dispatcher` 。 使用对象作为分派目标可以方便地子类化 `Event Handlers`，以便重用和扩展现有组件，此外，对象还能将服务的状态和方法集成到单个组件中。
+
+**`Event Handler` 方法**：另外一个把 `Event Handler` 和 `Handle` 关联起来的方法是注册一个方法到 `Initiation Dispatcher`，使用方法作为分派对象的好处是不需要定义一个新的类继承 `Event Handler` 就能很方便的注册回调。
+
+适配器模式可以同时支持对象和函数。例如，可以使用事件处理器对象定义适配器，该事件处理程序对象包含指向事件处理程序函数的指针，当在事件处理器适配器上调用 `handle_event` 方法时，它能够自动将调用转发到它持有的事件处理器方法。
+
+### 定义事件处理接口
+
+假设我们使用 `Event Handler` 对象而不是方法，下一步就是定义 `Event Handler` 的接口，有两种方法：
+
+**单方法接口**：第 7 节中的 OMT 图说明了 `Event Handler` 基类接口的实现，该接口包含一个名为 `handle_event` 的方法，`Initiation Dispatcher` 使用该方法来分派事件，在种情况下，已发生事件的类型作为参数传递给该方法。
+
+下面的 C++ 抽象基类展示了单方法接口：
+
+```c++
+class Event_Handler
+// = TITLE
+// Abstract base class that serves as the
+// target of the Initiation_Dispatcher.
+{
+public:
+  // Hook method that is called back by the
+  // Initiation_Dispatcher to handle events.
+  virtual int handle_event (Event_Type et) = 0;
+  // Hook method that returns the underlying I/O Handle.
+  virtual Handle get_handle (void) const = 0;
+};
+```
+
+单方法接口的优势是可以在不改动接口的情况下增加新的事件类型，但是，这种方法鼓励在子类的 `handle_event` 方法中使用 `switch` 语句，限制了它的扩展性。
+
+**多方法接口**：另外一个实现 `Event Handler` 接口的办法是为每种时间类型定义一个单独的方法，比如 `handle_input`, `handle_output`, `handle_timeout`。
+
+下面的 C++ 抽象基类展示了多方法接口
+
+```c++
+class Event_Handler
+{
+public:
+  // Hook methods that are called back by
+  // the Initiation_Dispatcher to handle
+  // particular types of events.
+  virtual int handle_accept (void) = 0;
+  virtual int handle_input (void) = 0;
+  virtual int handle_output (void) = 0;
+  virtual int handle_timeout (void) = 0;
+  virtual int handle_close (void) = 0;
+  // Hook method that returns the underlying I/O Handle.
+  virtual Handle get_handle (void) const = 0;
+};
+```
+
+多方法接口的好处是很容易选择性地覆盖基类中的方法，并避免进一步在 hook 方法中，例如通过 `switch` 或 `if` 语句，多路分离。然而，这要求框架开发者能够提前预知 `Event Handler` 的方法集合。比如，上面在 `Event_Handler` 接口中的各种 `handle_*` 方法是为 UNIX `select` 机制中可用的 I/O 事件定制的，但是这个接口还不够广泛到足以包含所有通过 Win32 `WaitForMultipleObjects` 机制处理的事件类型。
+
+以上描述的两种方式是在 [3] 中提到的钩子方法模式和在 [7] 中提到的回调工厂模式的例子，这些模式的目的是提供良好定义的钩子方法，可以被应用程序专用，也可以被低级的分派代码调用。
+
+【注3: W. Pree, Design Patterns for Object-Oriented Software Development. Reading, MA: Addison-Wesley, 1994.】
+
+【注7: S. Berczuk, “A Pattern for Separating Assembly and Processing,” in Pattern Languages of Program Design (J. O. Coplien and D. C. Schmidt, eds.), Reading, MA: Addison-Wesley,1995.】
+
+### 决定 `Initiation Dispatchers` 的数量
 
 
 
