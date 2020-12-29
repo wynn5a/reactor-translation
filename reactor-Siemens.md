@@ -280,7 +280,52 @@ public:
 
 ### 决定 `Initiation Dispatchers` 的数量
 
+很多应用程序可以使用一个 Reactor 模式就能够组织起来，这种情况下，`Initiation Dispatcher` 可以用单例模式实现，这种设计对在应用中把事件多路分离和分派集中到单一的位置很有帮助。
 
+然而，有些操作系统限制了单个控制线程中可以等待的 `Handles` 数量，比如，Win32 允许 `select` 和 `WaitForMultipleObjects` 在单个线程中等待的句柄数量不超过 64，这种情况下，创建每个线程运行单独 Reactor 实例的多线程可能就是必要的。
+
+注意，`Event Handlers` 只能在一个 Reactor 模式实例中串行，因此，多个 `Event Handlers` 在多线程中可以并行运行，如果 `Event Handlers` 在不同的线程中访问共享状态，这个情况可能需要使用额外的同步机制。
+
+### 实现具体的事件处理器
+
+具体的事件处理器一般被应用开发者创建来执行指定的服务以响应特定的事件，开发人员必须确定当起始调度程序（`Initiation Dispatcher`）调用相应的钩子方法时要执行什么处理。
+
+下面的代码实现了第 3 节描述的日志服务器中的具体事件处理器，这些处理器提供了*被动连接建立*（`Logging Acceptor`）和*数据接收*（`Logging Handler`）功能。
+
+**`Logging Acceptor` 类**：该类是 `Acceptor-Connector` 模式的 `Acceptor` 组件的一个示例，`Acceptor-Connector` 模式把服务初始化的任务和服务初始化完成之后要执行的任务解耦，允许服务的特定于应用程序的部分（如 `Logging Handler`）独立于用于建立连接的机制而变化。
+
+`Logging Acceptor` 被懂得接受来自客户端应用的连接，并且创建接收和处理来自客户端的日志记录数据的特定于客户端的 `Logging Handler` 对象。`Logging Acceptor` 中主要的方法和数据成员定义如下：
+
+```c++
+class Logging_Acceptor : public Event_Handler
+// = TITLE
+// Handles client connection requests.
+{
+public:
+  // Initialize the acceptor_ endpoint and
+  // register with the Initiation Dispatcher.
+  Logging_Acceptor (const INET_Addr &addr);
+  // Factory method that accepts a new
+  // SOCK_Stream connection and creates a
+  // Logging_Handler object to handle logging
+  // records sent using the connection.
+  virtual void handle_event (Event_Type et);
+  // Get the I/O Handle (called by the
+  // Initiation Dispatcher when
+  // Logging_Acceptor is registered).
+  virtual HANDLE get_handle (void) const
+  {
+  	return acceptor_.get_handle ();
+  }
+private:
+  // Socket factory that accepts client connections.
+  SOCK_Acceptor acceptor_;
+};
+```
+
+`Logging Acceptor` 继承了 `Event Handler` 基类，这让应用程序向 `Initiation Dispatcher` 注册 `Event Handler` 成为可能。
+
+`Logging Acceptor` 还包含了一个 `SOCKET Acceptor` 实例，这是一个具体的工厂，它使 `Logging Acceptor` 能够在监听通信端口的被动模式套接字上接受连接请求，当客户端的请求到来时，`SOCKET Acceptor` 接受连接并产生一个 `SOCKET Stream` 对象，此后，`SOCKET Stream` 对象可以用来
 
 【🔚】
 
