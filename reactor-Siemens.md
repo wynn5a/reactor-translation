@@ -282,7 +282,7 @@ public:
 
 很多应用程序可以使用一个 Reactor 模式就能够组织起来，这种情况下，`Initiation Dispatcher` 可以用单例模式实现，这种设计对在应用中把事件多路分离和分派集中到单一的位置很有帮助。
 
-然而，有些操作系统限制了单个控制线程中可以等待的 `Handles` 数量，比如，Win32 允许 `select` 和 `WaitForMultipleObjects` 在单个线程中等待的句柄数量不超过 64，这种情况下，创建每个线程运行单独 Reactor 实例的多线程可能就是必要的。
+然而，有些操作系统限制了单个控制线程中可以等待的 `Handles` 数量，比如，Win32 允许 `select` 和 `WaitForMultipleObjects` 在单个线程中等待的 `handle` 数量不超过 64，这种情况下，创建每个线程单独运行一个 Reactor 实例的多线程模式可能就是必要的。
 
 注意，`Event Handlers` 只能在一个 Reactor 模式实例中串行，因此，多个 `Event Handlers` 在多线程中可以并行运行，如果 `Event Handlers` 在不同的线程中访问共享状态，这个情况可能需要使用额外的同步机制。
 
@@ -325,7 +325,130 @@ private:
 
 `Logging Acceptor` 继承了 `Event Handler` 基类，这让应用程序向 `Initiation Dispatcher` 注册 `Event Handler` 成为可能。
 
-`Logging Acceptor` 还包含了一个 `SOCKET Acceptor` 实例，这是一个具体的工厂，它使 `Logging Acceptor` 能够在监听通信端口的被动模式套接字上接受连接请求，当客户端的请求到来时，`SOCKET Acceptor` 接受连接并产生一个 `SOCKET Stream` 对象，此后，`SOCKET Stream` 对象可以用来
+`Logging Acceptor` 还包含了一个 `SOCK Acceptor` 实例，这是一个具体的工厂，它使 `Logging Acceptor` 能够在监听通信端口的被动模式 socket 上接受连接请求。当客户端的请求到来时，`SOCK Acceptor` 接受连接并产生一个 `SOCK Stream` 对象，此后，`SOCK Stream` 对象可以用来在客户端和日志服务器间可靠的传递数据。
+
+实现日志服务器使用的 `SOCK Accpetor` 和 `SOCK Stream` 类是 ACE 提供的 C++ socket 包装库的一部分，这些 socket 包装器将 socket 接口的 `SOCK Stream` 语义封装在一个可移植的、类型安全的面向对象接口中，在 Internet 领域，`SOCK Stream` 套接字是使用 TCP 实现的。
+
+下面代码展示了 `Logging Acceptor` 的构造器中它向 `Initiation Dispatcher` 单例实例注册 `ACCEPT` 事件：
+
+```c++
+Logging_Acceptor::Logging_Acceptor(const INET_Addr &addr) : acceptor_ (addr)
+{
+	// Register acceptor with the Initiation
+	// Dispatcher, which "double dispatches"
+	// the Logging_Acceptor::get_handle() method
+	// to obtain the HANDLE.
+	Initiation_Dispatcher::instance()-> register_handler (this, ACCEPT_EVENT);
+}
+```
+
+此后，无论何时有客户端连接到来，`Initiation Dispatcher` 会回调 `Logging Acceptor` 的 `handle_event` 方法，如下：
+
+```c++
+void Logging_Acceptor::handle_event (Event_Type et)
+{
+	// Can only be called for an ACCEPT event.
+	assert (et == ACCEPT_EVENT);
+	SOCK_Stream new_connection;
+	// Accept the connection.
+	acceptor_.accept (new_connection);
+	// Create a new Logging Handler.
+	Logging_Handler *handler = new Logging_Handler (new_connection);
+}
+```
+
+`handle_event` 方法调用 `SOCK Acceptor` 的 `accept` 方法被动的创建一个 `SOCK Stream` 对象，一旦 `SOCK Stream` 跟新客户端建立连接，程序会动态分配一个 `Logging Handler` 来处理日志数据请求。如下所示，`Logging Handler` 向 `Initiation Dispatcher` 注册它自己，`Initiation Dispatcher` 会将跟它关联的客户端的所有的日志记录多路分离给它。
+
+**`Logging Handler` 类**：日志服务器使用 `Logging Handler` 类来接收客户端应用发送的日志记录。如下：
+
+```c++
+class Logging_Handler : public Event_Handler
+// = TITLE
+// Receive and process logging records
+// sent by a client application.
+{
+public:
+	// Initialize the client stream.
+	Logging_Handler (SOCK_Stream &cs);
+	// Hook method that handles the reception
+	// of logging records from clients.
+	virtual void handle_event (Event_Type et);
+	// Get the I/O Handle (called by the
+	// Initiation Dispatcher when
+	// Logging_Handler is registered).
+	virtual HANDLE get_handle (void) const
+	{
+		return peer_stream_.get_handle ();
+	}
+private:
+	// Receives logging records from a client.
+	SOCK_Stream peer_stream_;
+};
+```
+
+`Logging Handler` 继承了 `Event Handler`，这使它能够被注册到 `Initiation DIspatcher`，如下：
+
+```c++
+Logging_Handler::Logging_Handler(SOCK_Stream &cs) : peer_stream_ (cs)
+{
+	// Register with the dispatcher for
+	// READ events.
+	Initiation_Dispatcher::instance ()-> register_handler (this, READ_EVENT);
+}
+```
+
+一旦它被创建出来，`Logging Handler` 会向 `Initiation Dispatcher` 单例实例注册自己来处理 `READ` 事件，然后，当有日志记录请求到达，`Initiation Dispatcher` 自动分派到关联的 `Logging Handler` 的 `handle_event` 方法，如下所示：
+
+```c++
+void Logging_Handler::handle_event (Event_Type et)
+{
+	if (et == READ_EVENT) {
+		Log_Record log_record;
+		peer_stream_.recv ((void *) log_record, sizeof log_record);
+		// Write logging record to standard output.
+		log_record.write (STDOUT);
+	}
+	else if (et == CLOSE_EVENT) {
+		peer_stream_.close ();
+		delete (void *) this;
+	}
+}
+```
+
+当套接字句柄上有 READ 事件发生时，`Initiation Dispatcher` 调用 `Logging Handler` 的 `handle_event` 方法，这个方法接收、处理并且把日志记录写到标准输出（STDOUT），同样的，当客户端关闭连接时，`Initiation Dispatcher` 传递一个 CLOSE 事件，通知 `Logging Handler` 关闭它的 `SOCK Stream` 并删掉自己。
+
+### 实现服务器
+
+日志服务器只包含一个 `main` 函数。
+
+**日志服务器 `main` 函数**：这个方法实现了一个单线程的并发日志服务器，并在 `Initiation Dispatcher` 的事件循环中等待。当客户端请求到来时，`Initiation Dispatcher` 调用适合的 `Concrete Event Handler` 的钩子方法来接受请求，接收和处理日志记录。日志服务器的主入口点定义如下：
+
+```c++
+// Server port number.
+const u_short PORT = 10000;
+int main (void)
+{
+	// Logging server port number.
+	INET_Addr server_addr (PORT);
+	// Initialize logging server endpoint and
+	// register with the Initiation_Dispatcher.
+	Logging_Acceptor la (server_addr);
+	// Main event loop that handles client
+	// logging records and connection requests.
+	for (;;)
+		Initiation_Dispatcher::instance ()-> handle_events ();
+	/* NOTREACHED */
+	return 0;
+}
+```
+
+主程序创建了一个 `Logging Acceptor` 实例，它的构造方法用日志服务器的端口初始化了自己，然后主程序就进入了事件循环中。随后，`Initiation Dispatcher` 使用 `select` 这个事件多路分离系统调用来同步等待客户端的连接请求和日志记录的到来。
+
+下面的图表展示了参与日志服务器的对象之间的协作流程：
+
+![Objects collaboration](objects_collaboration.png)
+
+
 
 【🔚】
 
