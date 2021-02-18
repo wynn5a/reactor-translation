@@ -4,23 +4,26 @@ import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 
-public class Acceptor implements Runnable{
-    private final ServerSocketChannel serverSocket;
-    private final Selector selector;
-    public Acceptor(ServerSocketChannel serverSocket, Selector selector) {
-        this.serverSocket = serverSocket;
-        this.selector = selector;
-    }
+public class Acceptor implements Runnable {
 
-    @Override
-    public void run() {
-        try{
-            SocketChannel channel = serverSocket.accept();
-            if(channel!=null){
-                new Handler(selector, channel);
-            }
-        }catch (Exception e){
-            e.printStackTrace();
-        }
+  private final ServerSocketChannel serverSocket;
+  private final Selector selector;
+
+  public Acceptor(ServerSocketChannel serverSocket, Selector selector) {
+    this.serverSocket = serverSocket;
+    this.selector = selector;
+  }
+
+  @Override
+  public void run() {
+    System.out.println("Acceptor handler:" + this + " is running at " + Thread.currentThread().getName());
+    try {
+      SocketChannel channel = serverSocket.accept();
+      if (channel != null) {
+        new Handler(selector, channel);
+      }
+    } catch (Exception e) {
+      e.printStackTrace();
     }
+  }
 }
