@@ -11,7 +11,7 @@ public class Handler implements Runnable {
 
   private final SelectionKey selectionKey;
   private final SocketChannel socket;
-  private ByteBuffer buffer = ByteBuffer.allocate(1024);
+  private final ByteBuffer buffer = ByteBuffer.allocate(1024);
 
   public Handler(Selector selector, SocketChannel channel) throws IOException {
     this.socket = channel;
